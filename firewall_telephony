@@ -1,0 +1,107 @@
+#!/bin/bash
+
+#
+# Simple iptables firewall focused on telephony environment
+# Tested on Debian 8 - 11; Centos 7; ubuntu 20 - 22;
+#
+
+# Locations
+IPTABLES="$(which iptables)"
+BASEDIR=$(dirname $0)
+
+# Files
+ips_allow="${BASEDIR}/ips_allow.txt"
+ips_block="${BASEDIR}/ips_blocked.txt"
+ips_custumers="${BASEDIR}/ips_customers.txt"
+ips_br="${BASEDIR}/ips_brasil.txt"
+ports_allow="${BASEDIR}/ports_allow.txt"
+
+# Get interface
+iface_lan="`ifconfig | grep -B1 -E 'inet 192.168|addr:10.|addr:172|end.: 192.168|end.: 10.|end.: 172' | head -1 | cut -f1 -d':'`"
+
+_stop()
+{
+
+    # Stop firewall and clean rules
+    $IPTABLES -F
+    $IPTABLES -X
+    $IPTABLES -Z
+    $IPTABLES -t nat -F
+    $IPTABLES -t nat -X
+    $IPTABLES -t mangle -F
+    $IPTABLES -t mangle -X
+    $IPTABLES -P INPUT ACCEPT
+    $IPTABLES -P FORWARD ACCEPT
+    $IPTABLES -P OUTPUT ACCEPT
+
+}
+
+_start()
+{
+
+    # Allow localhost
+    $IPTABLES -A INPUT -i lo -j ACCEPT
+  
+    # Allow states EST and REL
+    $IPTABLES -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    $IPTABLES -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+    $IPTABLES -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
+  
+    # Allow LAN
+    $IPTABLES -A INPUT -i $iface_lan -j ACCEPT
+  
+    # Allow ICMP
+    $IPTABLES -A INPUT -p icmp -j ACCEPT 
+  
+    # Blocked IP's
+    for ip in `grep -Ev '^#' ${ips_block}`; do
+  		$IPTABLES -A INPUT -s $ip -j DROP
+  	done
+  
+    # Allow services by ports
+    for port in `grep -Ev '^#' ${ports_allow}`; do
+        $IPTABLES -A INPUT -p tcp -m tcp --dport $port -j ACCEPT
+    done
+  
+    # Allow asterisk working ports to IP's from Brasil
+    for ip in `grep -Ev '^#' ${ips_br}`; do
+	    $IPTABLES -A INPUT -s $ip -p udp -m udp --dport 5060 -j ACCEPT 
+		$IPTABLES -A INPUT -s $ip -p udp -m multiport --dports 10000:20000 -j ACCEPT 
+	done
+
+    # Allow asterisk working ports to IP's from trusted customers
+    for ip in `grep -Ev '^#' ${ips_c}`; do
+		$IPTABLES -A INPUT -s $ip -p udp -m udp --dport 5060 -j ACCEPT 
+		$IPTABLES -A INPUT -s $ip -p udp -m multiport --dports 10000:20000 -j ACCEPT 
+	done
+
+    # Allow trusted IPs
+    for ip in `grep -Ev '^#' ${ips_allow}`; do
+		$IPTABLES -A INPUT -s $ip -j ACCEPT 
+	done
+
+    # Log and block not matched
+    $IPTABLES -A INPUT -j LOG --log-prefix "INPUT:DROP:" --log-level 6
+    $IPTABLES -A INPUT -j DROP 
+	
+}
+
+case $1 in
+
+    'start')
+        _start
+        ;;
+    'stop')
+        _stop
+        ;;
+    'restart')
+        _stop
+        _start
+        ;;
+    *)
+        echo -e "
+    Usage:\n\t$0 <parameters>\n
+    Examples:\n\t$0 {start|stop|restart}"
+        ;;
+
+esac
